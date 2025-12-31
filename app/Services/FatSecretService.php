@@ -42,21 +42,36 @@ class FatSecretService
             'oauth_consumer_key' => $this->consumerKey,
             'oauth_signature_method' => 'HMAC-SHA1',
             'oauth_timestamp' => time(),
-            'oauth_nonce' => uniqid(),
+            'oauth_nonce' => uniqid('', true),
             'oauth_version' => '1.0',
         ];
 
         $baseParams = array_merge($oauth, $params);
         ksort($baseParams);
 
-        $baseString = 'GET&' . rawurlencode($this->baseUrl . '/rest/server.api') . '&' .
-            rawurlencode(http_build_query($baseParams, '', '&'));
+        $encodedParams = http_build_query(
+            $baseParams,
+            '',
+            '&',
+            PHP_QUERY_RFC3986 // 🔥 INI KUNCI UTAMA
+        );
+
+        $baseString = 'GET&' .
+            rawurlencode($this->baseUrl . '/rest/server.api') .
+            '&' .
+            rawurlencode($encodedParams);
 
         $signingKey = rawurlencode($this->consumerSecret) . '&';
-        $signature = base64_encode(hash_hmac('sha1', $baseString, $signingKey, true));
+
+        $signature = base64_encode(
+            hash_hmac('sha1', $baseString, $signingKey, true)
+        );
 
         $baseParams['oauth_signature'] = $signature;
 
-        return Http::get($this->baseUrl . '/rest/server.api', $baseParams)->json();
+        return Http::get(
+            $this->baseUrl . '/rest/server.api',
+            $baseParams
+        )->json();
     }
 }
