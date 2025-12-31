@@ -35,4 +35,10 @@ return [
         ],
     ],
 
+    'fatsecret' => [
+        'base_url' => env('FATSECRET_BASE_URL'),
+        'key' => env('FATSECRET_CONSUMER_KEY'),
+        'secret' => env('FATSECRET_CONSUMER_SECRET'),
+    ],
+
 ];
