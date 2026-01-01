@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Models\Food;
 use App\Services\FatSecretService;
+use Illuminate\Bus\Batchable;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -13,7 +14,7 @@ use Illuminate\Support\Facades\Log;
 
 class ImportFoodFromFatSecretJob implements ShouldQueue
 {
-    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels, Batchable, SerializesModels;
 
     public function __construct(
         protected string $searchExpression
@@ -62,6 +63,10 @@ class ImportFoodFromFatSecretJob implements ShouldQueue
          * STEP 4: Save SERVINGS + NUTRITION
          */
         $servings = $foodData['servings']['serving'] ?? [];
+
+        if (isset($servings['calories'])) {
+            $servings = [$servings];
+        }
 
         foreach ($servings as $serving) {
 
