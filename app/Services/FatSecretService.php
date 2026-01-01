@@ -17,26 +17,42 @@ class FatSecretService
         $this->consumerSecret = config('services.fatsecret.secret');
     }
 
+    /**
+     * SEARCH FOOD (v5)
+     * /rest/food/search/v5
+     */
     public function searchFood(string $query): array
     {
-        return $this->request([
-            'method' => 'foods.search',
-            'search_expression' => $query,
-            'format' => 'json',
-            'max_results' => 1,
-        ]);
+        return $this->request(
+            endpoint: '/rest/food/search/v5',
+            params: [
+                'method' => 'foods.search',
+                'search_expression' => $query,
+                'max_results' => 1,
+                'format' => 'json',
+            ]
+        );
     }
 
+    /**
+     * FOOD DETAIL (v5)
+     * /rest/food/v5
+     */
     public function getFoodDetail(string $foodId): array
     {
-        return $this->request([
-            'method' => 'food.get',
-            'food_id' => $foodId,
-            'format' => 'json',
-        ]);
+        return $this->request(
+            endpoint: '/rest/food/v5',
+            params: [
+                'food_id' => $foodId,
+                'format' => 'json',
+            ]
+        );
     }
 
-    protected function request(array $params): array
+    /**
+     * CORE REQUEST HANDLER (OAuth 1.0a)
+     */
+    protected function request(string $endpoint, array $params): array
     {
         $oauth = [
             'oauth_consumer_key' => $this->consumerKey,
@@ -53,11 +69,11 @@ class FatSecretService
             $baseParams,
             '',
             '&',
-            PHP_QUERY_RFC3986 // 🔥 INI KUNCI UTAMA
+            PHP_QUERY_RFC3986
         );
 
         $baseString = 'GET&' .
-            rawurlencode($this->baseUrl . '/rest/server.api') .
+            rawurlencode($this->baseUrl . $endpoint) .
             '&' .
             rawurlencode($encodedParams);
 
@@ -70,7 +86,7 @@ class FatSecretService
         $baseParams['oauth_signature'] = $signature;
 
         return Http::get(
-            $this->baseUrl . '/rest/server.api',
+            $this->baseUrl . $endpoint,
             $baseParams
         )->json();
     }
