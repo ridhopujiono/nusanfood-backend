@@ -3,83 +3,64 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
-use App\Models\MasterIngredientNutrition;
+use App\Jobs\ImportFoodFromFatSecretJob;
+use App\Models\Food;
+use App\Models\FoodServing;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\Rule;
+use Illuminate\Support\Facades\Bus;
+use PhpOffice\PhpSpreadsheet\IOFactory;
 
 class FoodController extends Controller
 {
+    /**
+     * LIST FOOD
+     */
     public function index(Request $request)
     {
-        $perPage = $request->integer('per_page', 10);
-        $search = $request->query('search');
-        return MasterIngredientNutrition::orderBy('food_name_translated')
-            ->when($search, function ($query) use ($search) {
-                return $query
-                    ->where('food_name_translated', 'like', "%{$search}%")
-                    ->orWhere('food_unit', 'like', "%{$search}%");
-            })
-            ->paginate($perPage);
+        return Food::with('servings.nutrition')
+            ->orderBy('created_at', 'desc')
+            ->paginate($request->per_page ?? 10);
     }
 
-    public function show($id)
-    {
-        $rows = DB::table('master_ingredient_nutritions as min2')
-            ->join(
-                'master_ingredient_nutrition_details as mind',
-                'mind.master_ingredient_nutritions_id',
-                '=',
-                'min2.id'
-            )
-            ->join(
-                'master_nutritions as mn',
-                'mind.attr_id',
-                '=',
-                'mn.attr_id'
-            )
-            ->where('min2.id', $id)
-            ->select(
-                'min2.id',
-                'min2.food_name_translated as food_name',
-                'min2.food_unit',
-                'mn.nutrition_name',
-                'mind.value',
-                'mn.unit'
-            )
-            ->orderBy('mn.nutrition_name')
-            ->get();
-
-        if ($rows->isEmpty()) {
-            return response()->json(['message' => 'Not found'], 404);
-        }
-
-        return response()->json([
-            'id' => $rows[0]->id,
-            'food_name' => $rows[0]->food_name,
-            'food_unit' => $rows[0]->food_unit,
-            'nutritions' => $rows->map(fn($r) => [
-                'nutrition_name' => $r->nutrition_name,
-                'value' => $r->value,
-                'unit' => $r->unit,
-            ]),
-        ]);
-    }
-
+    /**
+     * CREATE FOOD (nama bahan)
+     */
     public function store(Request $request)
     {
-        $data = $request->validate([
-            'food_name_translated' => 'required|string',
-            'food_unit' => 'required|string',
+        $request->validate([
+            'name' => 'required|string|max:255|unique:foods,name',
         ]);
 
-        return MasterIngredientNutrition::create($data);
+
+        ImportFoodFromFatSecretJob::dispatchSync($request->name);
+
+        return response()->json([
+            'data' => $request->all()
+        ]);
     }
 
-    public function update(Request $request, MasterIngredientNutrition $food)
+    /**
+     * SHOW FOOD + SERVINGS + NUTRITION
+     */
+    public function show(Food $food)
+    {
+        return $food->load('servings.nutrition');
+    }
+
+    /**
+     * UPDATE FOOD (nama bahan)
+     */
+    public function update(Request $request, Food $food)
     {
         $data = $request->validate([
-            'food_name_translated' => 'required|string',
-            'food_unit' => 'required|string',
+            'name' => [
+                'required',
+                'string',
+                Rule::unique('foods', 'name')->ignore($food->id),
+            ],
+            'food_type' => 'nullable|string|max:50',
         ]);
 
         $food->update($data);
@@ -87,27 +68,91 @@ class FoodController extends Controller
         return $food;
     }
 
-    public function verify($id)
-    {
-        $food = MasterIngredientNutrition::findOrFail($id);
-
-        $food->update([
-            'is_verified' => ! $food->is_verified,
-        ]);
-
-        return response()->json([
-            'id' => $food->id,
-            'is_verified' => $food->is_verified,
-        ]);
-    }
-
-
-    public function destroy(MasterIngredientNutrition $food)
+    /**
+     * DELETE FOOD (cascade ke serving + nutrition)
+     */
+    public function destroy(Food $food)
     {
         $food->delete();
 
+        return response()->noContent();
+    }
+
+    /**
+     * UPDATE NUTRITION (BERDASARKAN SERVING)
+     *
+     * UI flow:
+     * - user pilih food
+     * - pilih serving (dropdown)
+     * - edit nilai nutrisi
+     */
+    public function updateNutrition(
+        Request $request,
+        Food $food,
+        FoodServing $serving
+    ) {
+        // pastikan serving milik food
+        abort_if($serving->food_id !== $food->id, 404);
+
+        $data = $request->validate([
+            'calories' => 'nullable|numeric',
+            'carbohydrate' => 'nullable|numeric',
+            'protein' => 'nullable|numeric',
+            'fat' => 'nullable|numeric',
+
+            'saturated_fat' => 'nullable|numeric',
+            'polyunsaturated_fat' => 'nullable|numeric',
+            'monounsaturated_fat' => 'nullable|numeric',
+
+            'fiber' => 'nullable|numeric',
+            'sugar' => 'nullable|numeric',
+
+            'cholesterol' => 'nullable|numeric',
+            'sodium' => 'nullable|numeric',
+            'potassium' => 'nullable|numeric',
+
+            'vitamin_a' => 'nullable|numeric',
+            'vitamin_c' => 'nullable|numeric',
+            'calcium' => 'nullable|numeric',
+            'iron' => 'nullable|numeric',
+        ]);
+
+        DB::transaction(function () use ($serving, $data) {
+            $serving->nutrition()->updateOrCreate([], $data);
+        });
+
+        return $serving->load('nutrition');
+    }
+
+    public function uploadExcel(Request $request)
+    {
+        $request->validate([
+            'file' => 'required|file|mimes:xlsx',
+        ]);
+
+        $path = $request->file('file')->getRealPath();
+        $spreadsheet = IOFactory::load($path);
+        $sheet = $spreadsheet->getActiveSheet();
+        $rows = $sheet->toArray();
+
+        // asumsi:
+        // kolom A = food_name / search_expression
+        $jobs = [];
+
+        foreach ($rows as $index => $row) {
+            if ($index === 0) continue; // header
+            if (empty($row[0])) continue;
+
+            $jobs[] = new ImportFoodFromFatSecretJob(trim($row[0]));
+        }
+
+        $batch = Bus::batch($jobs)
+            ->name('Import Food From Excel')
+            ->dispatch();
+
         return response()->json([
-            'message' => 'Deleted',
+            'batch_id' => $batch->id,
+            'total_jobs' => count($jobs),
         ]);
     }
 }
